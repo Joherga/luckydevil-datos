@@ -44,18 +44,20 @@ def parse_csv(game, text):
     return list(out.values())
 
 # --- fuentes gratuitas (se prueban primero) ---
-def src_eurodreams():
+def src_eurodreams(desde=None):
     d = json.loads(http('https://juhuj.com/api/derniers-tirages.json'))['games']['eurodreams']
     return [[d['date'], sorted(int(x) for x in d['balls']), int(d['extras'][0])]]
-def src_euromillones():
+def src_euromillones(desde=None):
     return parse_csv('euromillones', http('https://raw.githubusercontent.com/daowa89/lottery-archive/main/eu/euromillions/results.csv'))
-def src_primitiva():
-    hoy = dt.date.today(); desde = hoy - dt.timedelta(days=21)
-    url = f'https://www.loteriasyapuestas.es/servicios/buscadorSorteos?game_id=LAPR&celebrados=true&fechaInicioInicial={desde:%Y%m%d}&fechaFinInicial={hoy:%Y%m%d}'
-    out = []
-    for it in json.loads(http(url)):
-        f = str(it.get('fecha_sorteo', ''))[:10]; v = [int(x) for x in re.findall(r'\d+', str(it.get('combinacion', '')))]
-        if len(v) >= 6: out.append([f, sorted(v[:6]), v[6] if len(v) > 6 and 1 <= v[6] <= 49 else None, v[7] if len(v) > 7 and 0 <= v[7] <= 9 else None])
+def src_primitiva(desde=None):
+    hoy = dt.date.today(); ini = desde or hoy - dt.timedelta(days=21); out = []
+    while ini <= hoy:  # ventanas de 60 días para no pedir rangos enormes de una vez
+        fin = min(ini + dt.timedelta(days=60), hoy)
+        url = f'https://www.loteriasyapuestas.es/servicios/buscadorSorteos?game_id=LAPR&celebrados=true&fechaInicioInicial={ini:%Y%m%d}&fechaFinInicial={fin:%Y%m%d}'
+        for it in json.loads(http(url)):
+            f = str(it.get('fecha_sorteo', ''))[:10]; v = [int(x) for x in re.findall(r'\d+', str(it.get('combinacion', '')))]
+            if len(v) >= 6: out.append([f, sorted(v[:6]), v[6] if len(v) > 6 and 1 <= v[6] <= 49 else None, v[7] if len(v) > 7 and 0 <= v[7] <= 9 else None])
+        ini = fin + dt.timedelta(days=1)
     return out
 SRC = {'primitiva': src_primitiva, 'euromillones': src_euromillones, 'eurodreams': src_eurodreams}
 
@@ -102,9 +104,18 @@ def main():
     ap = argparse.ArgumentParser()
     for g in CFG: ap.add_argument('--' + g, help=f'CSV de {g}')
     ap.add_argument('--api'); ap.add_argument('--auto', action='store_true'); ap.add_argument('--salida', default='datos.json')
+    ap.add_argument('--rellenar', metavar='AAAA-MM-DD', help='rellena huecos de Primitiva y Euromillones desde esa fecha')
     a = ap.parse_args(); key = a.api or os.environ.get('LOTERIAS_API_KEY', '')
     feed = json.load(open(a.salida, encoding='utf-8')) if os.path.exists(a.salida) else {'v': 1}
     if a.auto: auto(feed, key)
+    if a.rellenar:
+        try: desde = dt.date.fromisoformat(a.rellenar)
+        except ValueError: raise SystemExit('Fecha no válida: usa AAAA-MM-DD, por ejemplo 2026-06-23')
+        for g in ('primitiva', 'euromillones'):
+            cur = {e[0]: e for e in feed.get(g, [])}
+            try: n = add(cur, SRC[g](desde), g); print(f'{g}: relleno desde {desde} OK ({n} nuevos)')
+            except Exception as ex: print(f'{g}: relleno falló ({type(ex).__name__}: {ex})')
+            feed[g] = sorted(cur.values(), key=lambda e: e[0])
     else:
         for g in CFG:
             cur = {e[0]: e for e in feed.get(g, [])}; new = []
