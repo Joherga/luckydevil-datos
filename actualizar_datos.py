@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Crea o actualiza datos.json para LuckyDevil (fusiona con el existente, sin duplicar fechas).
 
-  python actualizar_datos.py --auto                 # lo que ejecuta GitHub Actions
+  python actualizar_datos.py --auto                 # lo que ejecuta GitHub Actions (también importa primitiva.csv, euromillones.csv o eurodreams.csv si los subes al repositorio)
   python actualizar_datos.py --primitiva p.csv --euromillones e.csv --eurodreams d.csv
   python actualizar_datos.py --api TU_CLAVE         # último sorteo de cada juego con loteriasapi.com
 En modo --auto solo consulta un juego si ya debería haber un sorteo nuevo, para no gastar peticiones.
@@ -89,7 +89,13 @@ def add(cur, nuevos, g):
 def auto(feed, key, now=None):
     now = now or dt.datetime.now(ZoneInfo('Europe/Madrid'))
     for g in CFG:
-        cur = {e[0]: e for e in feed.get(g, [])}; exp = expected(g, now); last = max(cur) if cur else ''
+        cur = {e[0]: e for e in feed.get(g, [])}
+        for ruta in (f'{g}.csv', f'csv/{g}.csv'):  # CSV que hayas subido al repositorio (p. ej. los de lotoideas)
+            if os.path.exists(ruta):
+                try: print(f'{g}: CSV {ruta}: {add(cur, parse_csv(g, open(ruta, encoding="utf-8", errors="ignore").read()), g)} nuevos')
+                except Exception as ex: print(f'{g}: CSV {ruta} falló ({ex})')
+        feed[g] = sorted(cur.values(), key=lambda e: e[0])
+        exp = expected(g, now); last = max(cur) if cur else ''
         if last >= exp: print(f'{g}: al día ({last})'); continue
         print(f'{g}: falta el sorteo del {exp} (último guardado: {last or "ninguno"})')
         fuentes = [('fuente gratuita', SRC[g])] + ([('API', lambda g=g: api_latest(g, key))] if key else [])
