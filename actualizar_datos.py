@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Crea o actualiza datos.json para LuckyDevil (fusiona con el existente, sin duplicar fechas).
 
-  python actualizar_datos.py --auto                 # lo que ejecuta GitHub Actions (también importa primitiva.csv, euromillones.csv o eurodreams.csv si los subes al repositorio)
-  python actualizar_datos.py --primitiva p.csv --euromillones e.csv --eurodreams d.csv
+  python actualizar_datos.py --auto                 # lo que ejecuta GitHub Actions (también importa primitiva.csv, bonoloto.csv, euromillones.csv o eurodreams.csv si los subes al repositorio)
+  python actualizar_datos.py --primitiva p.csv --bonoloto b.csv --euromillones e.csv --eurodreams d.csv
   python actualizar_datos.py --api TU_CLAVE         # último sorteo de cada juego con loteriasapi.com
 En modo --auto solo consulta un juego si ya debería haber un sorteo nuevo, para no gastar peticiones.
 La clave de la API (opcional, respaldo) se lee de --api o de la variable LOTERIAS_API_KEY.
 """
 import argparse, datetime as dt, json, os, re, urllib.request
 from zoneinfo import ZoneInfo
-CFG = {'primitiva': (6, 49), 'euromillones': (5, 50), 'eurodreams': (6, 40)}
-DRAW = {'primitiva': ([0, 3, 5], 22 * 60 + 15), 'euromillones': ([1, 4], 22 * 60 + 30), 'eurodreams': ([0, 3], 21 * 60 + 15)}  # lun=0
+CFG = {'primitiva': (6, 49), 'bonoloto': (6, 49), 'euromillones': (5, 50), 'eurodreams': (6, 40)}
+COMPL = ('primitiva', 'bonoloto')  # juegos con complementario y reintegro: [fecha, numeros, complementario, reintegro]
+DRAW = {'primitiva': ([0, 3, 5], 22 * 60 + 15), 'bonoloto': ([0, 1, 2, 3, 4, 5], 22 * 60 + 15), 'euromillones': ([1, 4], 22 * 60 + 30), 'eurodreams': ([0, 3], 21 * 60 + 15)}  # lun=0
 DATE = re.compile(r'(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{4})')
 UA = 'Mozilla/5.0 (compatible; LuckyDevilBot/1.0)'
 
@@ -37,7 +38,7 @@ def parse_csv(game, text):
             a, b, y = re.split(r'[/-]', d); d = f'{y}-{int(b):02d}-{int(a):02d}'
         v = [int(x) for x in re.findall(r'\d+', line[mt.end():])]
         nums, e = v[:n], v[n:]
-        if game == 'primitiva': ent = [d, sorted(nums), e[0] if e and 1 <= e[0] <= 49 else None, e[1] if len(e) > 1 and 0 <= e[1] <= 9 else None]
+        if game in COMPL: ent = [d, sorted(nums), e[0] if e and 1 <= e[0] <= 49 else None, e[1] if len(e) > 1 and 0 <= e[1] <= 9 else None]
         elif game == 'euromillones': ent = [d, sorted(nums), sorted(e[:2])]
         else: ent = [d, sorted(nums), e[0] if e else 0]
         if valid(game, ent): out[d] = ent
@@ -49,17 +50,18 @@ def src_eurodreams(desde=None):
     return [[d['date'], sorted(int(x) for x in d['balls']), int(d['extras'][0])]]
 def src_euromillones(desde=None):
     return parse_csv('euromillones', http('https://raw.githubusercontent.com/daowa89/lottery-archive/main/eu/euromillions/results.csv'))
-def src_primitiva(desde=None):
+def src_selae(gid, desde=None):
     hoy = dt.date.today(); ini = desde or hoy - dt.timedelta(days=21); out = []
     while ini <= hoy:  # ventanas de 60 días para no pedir rangos enormes de una vez
         fin = min(ini + dt.timedelta(days=60), hoy)
-        url = f'https://www.loteriasyapuestas.es/servicios/buscadorSorteos?game_id=LAPR&celebrados=true&fechaInicioInicial={ini:%Y%m%d}&fechaFinInicial={fin:%Y%m%d}'
+        url = f'https://www.loteriasyapuestas.es/servicios/buscadorSorteos?game_id={gid}&celebrados=true&fechaInicioInicial={ini:%Y%m%d}&fechaFinInicial={fin:%Y%m%d}'
         for it in json.loads(http(url)):
             f = str(it.get('fecha_sorteo', ''))[:10]; v = [int(x) for x in re.findall(r'\d+', str(it.get('combinacion', '')))]
             if len(v) >= 6: out.append([f, sorted(v[:6]), v[6] if len(v) > 6 and 1 <= v[6] <= 49 else None, v[7] if len(v) > 7 and 0 <= v[7] <= 9 else None])
         ini = fin + dt.timedelta(days=1)
     return out
-SRC = {'primitiva': src_primitiva, 'euromillones': src_euromillones, 'eurodreams': src_eurodreams}
+SRC = {'primitiva': lambda desde=None: src_selae('LAPR', desde), 'bonoloto': lambda desde=None: src_selae('BONO', desde),
+       'euromillones': src_euromillones, 'eurodreams': src_eurodreams}
 
 # --- API de pago/prueba (respaldo) ---
 def api_latest(game, key):
@@ -70,7 +72,7 @@ def api_latest(game, key):
         for k, v in rd.items():
             if re.search(rx, k, re.I) and not isinstance(v, (dict, list)) and v not in (None, ''): return int(v)
     date = d['drawDate']
-    if game == 'primitiva': return [[date, nums, pick('compl'), pick('reint|refund')]]
+    if game in COMPL: return [[date, nums, pick('compl'), pick('reint|refund')]]
     if game == 'euromillones': return [[date, nums, sorted(int(x) for x in rd.get('estrellas', []))]]
     return [[date, nums, pick('dream|sue') or 0]]
 
@@ -110,14 +112,14 @@ def main():
     ap = argparse.ArgumentParser()
     for g in CFG: ap.add_argument('--' + g, help=f'CSV de {g}')
     ap.add_argument('--api'); ap.add_argument('--auto', action='store_true'); ap.add_argument('--salida', default='datos.json')
-    ap.add_argument('--rellenar', metavar='AAAA-MM-DD', help='rellena huecos de Primitiva y Euromillones desde esa fecha')
+    ap.add_argument('--rellenar', metavar='AAAA-MM-DD', help='rellena huecos de Primitiva, Bonoloto y Euromillones desde esa fecha')
     a = ap.parse_args(); key = a.api or os.environ.get('LOTERIAS_API_KEY', '')
     feed = json.load(open(a.salida, encoding='utf-8')) if os.path.exists(a.salida) else {'v': 1}
     if a.auto: auto(feed, key)
     if a.rellenar:
         try: desde = dt.date.fromisoformat(a.rellenar)
         except ValueError: raise SystemExit('Fecha no válida: usa AAAA-MM-DD, por ejemplo 2026-06-23')
-        for g in ('primitiva', 'euromillones'):
+        for g in ('primitiva', 'bonoloto', 'euromillones'):
             cur = {e[0]: e for e in feed.get(g, [])}
             try: n = add(cur, SRC[g](desde), g); print(f'{g}: relleno desde {desde} OK ({n} nuevos)')
             except Exception as ex: print(f'{g}: relleno falló ({type(ex).__name__}: {ex})')
