@@ -2,7 +2,7 @@
 """LuckyDevil · actualiza datos.json (versión 3: cuatro juegos, CSV subidos al repositorio y diagnóstico de la API).
 
   python actualizar_datos.py --auto     # lo que ejecuta GitHub Actions
-Importa también primitiva.csv, bonoloto.csv, euromillones.csv y eurodreams.csv si los subes a la raíz del repositorio.
+Importa también los CSV que subas a la raíz del repositorio con el nombre del juego al principio (por ejemplo «Primitiva - 2013 a 202X.csv»).
 Solo consulta un juego si ya debería haber un sorteo nuevo, para gastar pocas peticiones de la API (LOTERIAS_API_KEY).
 """
 import argparse, datetime as dt, json, os, re, urllib.request
@@ -75,6 +75,10 @@ def api_latest(g, key):
     if not valid(g, ent): print('  API devolvió datos que no encajan:', json.dumps({k: v for k, v in d.items() if k not in ('prizes', 'prizeBreakdown')}, ensure_ascii=False)[:700])
     return [ent]
 
+def csv_de(g):
+    import glob
+    return sorted(f for f in glob.glob('*.csv') + glob.glob('csv/*.csv') if os.path.basename(f).lower().startswith(g))
+
 def expected(g, now):
     days, mins = DRAW[g]; d = now
     if not (d.weekday() in days and d.hour * 60 + d.minute >= mins): d -= dt.timedelta(days=1)
@@ -91,10 +95,9 @@ def auto(feed, key, now=None):
     now = now or dt.datetime.now(ZoneInfo('Europe/Madrid'))
     for g in CFG:
         cur = {e[0]: e for e in feed.get(g, [])}
-        for ruta in (f'{g}.csv', f'csv/{g}.csv'):
-            if os.path.exists(ruta):
-                try: print(f'{g}: CSV {ruta}: {add(cur, parse_csv(g, open(ruta, encoding="utf-8", errors="ignore").read()), g)} nuevos')
-                except Exception as ex: print(f'{g}: CSV {ruta} falló ({ex})')
+        for ruta in csv_de(g):  # cualquier CSV cuyo nombre empiece por el juego, p. ej. «Primitiva - 1985 a 2012.csv»
+            try: print(f'{g}: CSV «{ruta}»: {add(cur, parse_csv(g, open(ruta, encoding="utf-8", errors="ignore").read()), g)} nuevos')
+            except Exception as ex: print(f'{g}: CSV «{ruta}» falló ({ex})')
         feed[g] = sorted(cur.values(), key=lambda e: e[0])
         exp = expected(g, now); last = max(cur) if cur else ''
         if last >= exp: print(f'{g}: al día ({last}, {len(cur)} sorteos)'); continue
